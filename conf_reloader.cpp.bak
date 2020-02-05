@@ -1,0 +1,171 @@
+#include "conf_reloader.h"
+#include <sys/stat.h>
+#include <unistd.h>
+#include "logger.h"
+#include "config.h"
+
+namespace cmnews {
+
+const std::string conf_reloader_t::_chain_dir = "./conf/chains";
+const std::string conf_reloader_t::_exp_dir = "./conf/experiments";
+const std::string conf_reloader_t::_traffic_splitting_dir = "./conf/traffic_splitting";
+
+conf_reloader_t conf_reloader_t::_instance;
+
+conf_reloader_t::conf_reloader_t() {
+    _reload_flag = false;
+    _tm = time(NULL);
+    _conf_dir = "";
+    _cur_index = 1;
+    _replace_times = 0;
+    pthread_mutex_init(&_mutex, NULL);
+}
+
+conf_reloader_t::~conf_reloader_t() {
+    pthread_mutex_destroy(&_mutex);
+}
+
+int conf_reloader_t::set_tm(const time_t& tm) {
+    _tm = tm;
+    return 0;
+}
+
+void conf_reloader_t::set_reload_flag( const bool flag)
+{
+    pthread_mutex_lock(&_mutex);
+    _reload_flag = flag;
+    pthread_mutex_unlock(&_mutex);
+}
+
+bool conf_reloader_t::get_reload_flag()
+{
+    bool reload_flag;
+    pthread_mutex_lock(&_mutex);
+    reload_flag = _reload_flag;
+    pthread_mutex_unlock(&_mutex);
+    return reload_flag;
+}
+
+conf_reloader_t & conf_reloader_t::get_instance() { return _instance; }
+
+bool conf_reloader_t::get_last_modify_time(const std::string& path, time_t& tm) {
+    if (path == "") {
+        return false;
+    }
+    struct stat curr_stat;
+    if (stat(path.c_str(), &curr_stat) != 0) {
+        // LOG_ERROR("can't get stat of reload flag,%s", path.c_str());
+        return false;
+    }
+    tm = curr_stat.st_mtime;
+    return true;
+}
+
+bool conf_reloader_t::init_conf_dir_tm( std::string dir)
+{
+    bool ret = false;
+    if (dir == "") {
+        // LOG_ERROR("path of reload flag is empty");
+        return false;
+    }
+    _conf_dir = dir;
+    time_t tm;
+    if (conf_reloader_t::get_last_modify_time(_conf_dir, tm)) {
+        _tm = tm;
+        ret = true;
+    }
+   
+    config_t& config = config_t::get_instance();
+    std::string ts_conf_dir = config.get_string("cmnews.ts_dir");
+    if (!ts_conf_dir.empty()) {
+        _traffic_splitting_path = conf_reloader_t::_traffic_splitting_dir + "/" + ts_conf_dir;
+    } 
+    return ret;
+}
+
+int conf_reloader_t::reload() {
+    if (_conf_dir == "") {
+        // LOG_ERROR("dir of reload flag is empty");
+        return -1;
+    }
+    int ret = 1;
+    time_t cur_tm;
+    if ( ! conf_reloader_t::get_last_modify_time(_conf_dir, cur_tm)) {
+        // LOG_ERROR("get conf dir tm last modify time error");
+        return -1;
+    }
+    if (cur_tm > _tm) {
+        long time_begin = TimeUtils::GetCurrentTime();
+        // experiment reload
+        ret = _experiment_instance[ 1 - _cur_index].reload_experiments(conf_reloader_t::_exp_dir);
+        if (ret < 0) {
+           // LOG_ERROR("conf_reloader_t experiment reload failed");
+           _tm = cur_tm;
+           return ret;
+        }
+
+        // traffic reload
+        // ret = _traffic_splitter_instance[1 - _cur_index].reload_config( &(_experiment_instance[1 - _cur_index]) , _traffic_splitting_path);
+        // if (ret < 0) {
+           // // LOG_ERROR("conf_reloader_t traffic reload failed");
+           // _tm = cur_tm;
+           // return ret;
+        // }
+
+        // multi traffic reload
+        // ret = _multi_layer_ts_instance[ 1 - _cur_index].reload( &(_experiment_instance[1 - _cur_index]));
+        // if (ret < 0) {
+           // // LOG_ERROR("conf_reloader_t multi layer traffic reload failed");
+           // _tm = cur_tm;
+           // return ret;
+        // }
+
+        // chain factory reload
+        ret = _chain_factory_instance[ 1 - _cur_index].LoadConfig(conf_reloader_t::_chain_dir);
+        if (ret < 0) {
+           // LOG_ERROR("conf_reloader_t chain factory reload failed");
+           _tm = cur_tm;
+           return ret;
+        }
+
+        // must be the last one to reset index
+        pthread_mutex_lock(&_mutex);
+        _cur_index = 1 - _cur_index;
+        // LOG_INFO("now chain_factory_cur_index #%d is in service", _cur_index);
+        _tm = cur_tm;
+        _reload_flag = true;
+        pthread_mutex_unlock(&_mutex);
+        // LOG_INFO("conf_reloader_t reload conf costs:%ld", TimeUtils::GetCurrentTime() - time_begin);
+        // ret = 1;
+    }
+    return ret;
+}
+
+bool conf_reloader_t::try_replace_conf()
+{
+    pthread_mutex_lock(&_mutex);
+    if (_reload_flag == false) {
+        pthread_mutex_unlock(&_mutex);
+        return false;
+    }
+    // LOG_INFO("start to replace conf");
+    long time_begin = TimeUtils::GetCurrentTime();
+    ChainFactory& old_chain_factory = ChainFactory::GetInstance();
+    if (_replace_times == 0) {
+        old_chain_factory.Clear();
+    }
+    /*
+    old_chain_factory = _chain_factory_instance[_cur_index];
+    traffic_splitter_t & old_splitter = traffic_splitter_t::get_instance();
+    old_splitter = _traffic_splitter_instance[_cur_index];
+    experiment_t& old_instance = experiment_t::get_instance();
+    old_instance = _experiment_instance[_cur_index];
+    _reload_flag = false;
+    _replace_times += 1;
+    */
+    pthread_mutex_unlock(&_mutex);
+    // LOG_INFO("replace conf over, cost %ld", TimeUtils::GetCurrentTime() - time_begin);
+    return true;
+}
+
+}

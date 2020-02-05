@@ -1,0 +1,51 @@
+#ifndef _CONF_RELOADER_H_
+#define _CONF_RELOADER_H_
+
+#include <map>
+#include <vector>
+#include <sys/time.h>
+#include <pthread.h>
+#include "framework/chain/chain_factory.h"
+#include "framework/variable.h"
+// #include "traffic_splitter.h"
+#include "experiment.h"
+
+namespace cmnews {
+
+class conf_reloader_t {
+private:
+    static conf_reloader_t _instance;
+    conf_reloader_t();
+    volatile bool _reload_flag;
+    time_t _tm;
+    pthread_mutex_t _mutex;
+    std::string _conf_dir;
+
+private:     
+    int _cur_index;
+    ChainFactory _chain_factory_instance[2];
+    // traffic_splitter_t _traffic_splitter_instance[2];
+    experiment_t _experiment_instance[2];
+
+    const static std::string _chain_dir;
+    const static std::string _exp_dir;
+    const static std::string _traffic_splitting_dir;
+    std::string _traffic_splitting_path;
+
+    int _replace_times;
+public:
+    int set_tm(const time_t& tm);
+    void set_reload_flag( const bool flag);
+    bool get_reload_flag();
+    virtual ~conf_reloader_t();
+    int reload();    
+    bool try_replace_conf();
+    bool init_conf_dir_tm(std::string dir);
+
+    static bool get_last_modify_time(const std::string& path, time_t & tm);
+    static conf_reloader_t & get_instance();
+}; 
+
+}
+
+#endif
